@@ -1,0 +1,139 @@
+from google.colab import files
+uploaded = files.upload()  
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+from imblearn.over_sampling import SMOTE  
+
+train_data = pd.read_csv('fraudTrain.csv')
+test_data = pd.read_csv('fraudTest.csv')
+
+print("First 5 rows of the training dataset:")
+print(train_data.head())
+print("\nFirst 5 rows of the testing dataset:")
+print(test_data.head())
+
+print("\nMissing values in the training dataset:")
+print(train_data.isnull().sum())
+print("\nSummary statistics for numeric columns in the training dataset:")
+print(train_data.describe())
+
+plt.figure(figsize=(6, 4))
+sns.countplot(x='is_fraud', data=train_data)
+plt.title('Distribution of Fraudulent Transactions (Training Dataset)')
+plt.xlabel('Is Fraud (0 = No, 1 = Yes)')
+plt.ylabel('Count')
+plt.show()
+
+numeric_data = train_data.select_dtypes(include=[np.number])
+correlation_matrix = numeric_data.corr()
+plt.figure(figsize=(10, 8))
+sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt='.2f')
+plt.title('Correlation Heatmap (Numeric Columns Only)')
+plt.show()
+
+columns_to_drop = ['trans_num', 'unix_time', 'first', 'last']
+train_data.drop(columns=columns_to_drop, axis=1, inplace=True, errors='ignore')
+test_data.drop(columns=columns_to_drop, axis=1, inplace=True, errors='ignore')
+
+X_train = train_data.drop('is_fraud', axis=1)
+y_train = train_data['is_fraud']
+X_test = test_data.drop('is_fraud', axis=1)
+y_test = test_data['is_fraud']
+
+if 'trans_date_trans_time' in X_train.columns:
+    X_train['trans_date_trans_time'] = pd.to_datetime(X_train['trans_date_trans_time'])
+    X_test['trans_date_trans_time'] = pd.to_datetime(X_test['trans_date_trans_time'])
+
+    X_train['hour'] = X_train['trans_date_trans_time'].dt.hour
+    X_train['day'] = X_train['trans_date_trans_time'].dt.day
+    X_train['month'] = X_train['trans_date_trans_time'].dt.month
+
+    X_test['hour'] = X_test['trans_date_trans_time'].dt.hour
+    X_test['day'] = X_test['trans_date_trans_time'].dt.day
+    X_test['month'] = X_test['trans_date_trans_time'].dt.month
+
+    X_train.drop('trans_date_trans_time', axis=1, inplace=True, errors='ignore')
+    X_test.drop('trans_date_trans_time', axis=1, inplace=True, errors='ignore')
+
+categorical_cols = X_train.select_dtypes(include=['object']).columns.tolist()
+numerical_cols = X_train.select_dtypes(include=[np.number]).columns.tolist()
+
+label_encoder = LabelEncoder()
+for col in categorical_cols:
+    combined = pd.concat([X_train[col], X_test[col]])
+    label_encoder.fit(combined)
+    X_train[col] = label_encoder.transform(X_train[col])
+    X_test[col] = label_encoder.transform(X_test[col])
+
+scaler = StandardScaler()
+X_train[numerical_cols] = scaler.fit_transform(X_train[numerical_cols])
+X_test[numerical_cols] = scaler.transform(X_test[numerical_cols])
+
+X_train, X_test = X_train.align(X_test, join='inner', axis=1)
+
+model = RandomForestClassifier(n_estimators=100, n_jobs=-1, random_state=42)
+model.fit(X_train, y_train)
+y_pred = model.predict(X_test)
+
+conf_matrix = confusion_matrix(y_test, y_pred)
+plt.figure(figsize=(6, 4))
+sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues')
+plt.title('Confusion Matrix')
+plt.xlabel('Predicted')
+plt.ylabel('Actual')
+plt.show()
+
+print("\nClassification Report:")
+print(classification_report(y_test, y_pred))
+print(f"\nAccuracy: {accuracy_score(y_test, y_pred):.2f}")
+
+smote = SMOTE(random_state=42)
+X_resampled, y_resampled = smote.fit_resample(X_train, y_train)
+
+model.fit(X_resampled, y_resampled)
+y_pred_resampled = model.predict(X_test)
+
+print("\nClassification Report After SMOTE:")
+print(classification_report(y_test, y_pred_resampled))
+
+feature_importance = pd.DataFrame({
+    'Feature': X_train.columns,
+    'Importance': model.feature_importances_
+}).sort_values(by='Importance', ascending=False)
+
+print("\nFeature Importance:")
+print(feature_importance)
+
+plt.figure(figsize=(8, 6))
+sns.barplot(x='Importance', y='Feature', data=feature_importance)
+plt.title('Feature Importance')
+plt.show()
+
+test_data['predicted_is_fraud'] = y_pred
+predicted_fraud_records = test_data[test_data['predicted_is_fraud'] == 1]
+
+print("\nRecords Predicted as Fraud:")
+print(predicted_fraud_records)
+
+predicted_fraud_records.to_csv('predicted_fraud_records.csv', index=False)
+print("\nFraud records saved to 'predicted_fraud_records.csv'")
+
+plt.figure(figsize=(10, 6))
+sns.countplot(data=predicted_fraud_records, x='merchant', order=predicted_fraud_records['merchant'].value_counts().index[:10])
+plt.title('Top Merchants with Predicted Fraudulent Transactions')
+plt.xticks(rotation=90)
+plt.show()
+
+plt.figure(figsize=(8, 6))
+sns.histplot(predicted_fraud_records['amt'], bins=20, kde=True)
+plt.title('Distribution of Fraudulent Transaction Amounts')
+plt.xlabel('Transaction Amount')
+plt.ylabel('Frequency')
+plt.show()
